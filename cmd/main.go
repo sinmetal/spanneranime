@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"image/color"
 	"log"
+	"math/rand"
+	"os"
 	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
@@ -54,37 +56,57 @@ type Game struct {
 	packetTargetX, packetTargetY float32
 	packetSpeed                  float32
 	showJoined                   bool
+	AnimationType                string
 }
 
-func NewGame() *Game {
+func NewGame(animationType string) *Game {
+	users := []User{
+		{UserID: 1, Name: "Alice"},
+		{UserID: 2, Name: "Bob"},
+		{UserID: 3, Name: "Charlie"},
+		{UserID: 4, Name: "David"},
+		{UserID: 5, Name: "Eve"},
+		{UserID: 6, Name: "Frank"},
+		{UserID: 7, Name: "Grace"},
+		{UserID: 8, Name: "Heidi"},
+		{UserID: 9, Name: "Ivan"},
+		{UserID: 10, Name: "Judy"},
+	}
+
+	orders := []Order{
+		{OrderID: 101, Item: "Book"},
+		{OrderID: 102, Item: "Pen"},
+		{OrderID: 103, Item: "Note"},
+		{OrderID: 104, Item: "Laptop"},
+		{OrderID: 105, Item: "Mouse"},
+		{OrderID: 106, Item: "Keyboard"},
+		{OrderID: 107, Item: "Monitor"},
+		{OrderID: 108, Item: "Webcam"},
+		{OrderID: 109, Item: "HDMI Cable"},
+		{OrderID: 110, Item: "USB Hub"},
+	}
+
+	userIDs := make([]int, len(users))
+	for i := range users {
+		userIDs[i] = users[i].UserID
+	}
+
+	rand.Seed(time.Now().UnixNano())
+	rand.Shuffle(len(userIDs), func(i, j int) {
+		userIDs[i], userIDs[j] = userIDs[j], userIDs[i]
+	})
+
+	for i := range orders {
+		orders[i].UserID = userIDs[i]
+	}
+
 	g := &Game{
-		Users: []User{
-			{UserID: 1, Name: "Alice"},
-			{UserID: 2, Name: "Bob"},
-			{UserID: 3, Name: "Charlie"},
-			{UserID: 4, Name: "David"},
-			{UserID: 5, Name: "Eve"},
-			{UserID: 6, Name: "Frank"},
-			{UserID: 7, Name: "Grace"},
-			{UserID: 8, Name: "Heidi"},
-			{UserID: 9, Name: "Ivan"},
-			{UserID: 10, Name: "Judy"},
-		},
-		Orders: []Order{
-			{OrderID: 101, UserID: 2, Item: "Book"},
-			{OrderID: 102, UserID: 1, Item: "Pen"},
-			{OrderID: 103, UserID: 3, Item: "Note"},
-			{OrderID: 104, UserID: 4, Item: "Laptop"},
-			{OrderID: 105, UserID: 5, Item: "Mouse"},
-			{OrderID: 106, UserID: 6, Item: "Keyboard"},
-			{OrderID: 107, UserID: 7, Item: "Monitor"},
-			{OrderID: 108, UserID: 8, Item: "Webcam"},
-			{OrderID: 109, UserID: 9, Item: "HDMI Cable"},
-			{OrderID: 110, UserID: 10, Item: "USB Hub"},
-		},
+		Users:            users,
+		Orders:           orders,
 		animationStep:    stepIdle,
 		currentUserIndex: -1,
 		packetSpeed:      5,
+		AnimationType:    animationType,
 	}
 	return g
 }
@@ -106,8 +128,12 @@ func (g *Game) setPacketStartPosition() {
 }
 
 func (g *Game) Update() error {
-	if g.animationStep == stepIdle && inpututil.IsKeyJustPressed(ebiten.KeySpace) {
-		g.startAnimation()
+	if g.animationStep == stepIdle {
+		if g.AnimationType == "JOIN1" {
+			g.startAnimation()
+		} else if inpututil.IsKeyJustPressed(ebiten.KeySpace) {
+			g.startAnimation()
+		}
 	}
 
 	if g.animationStep == stepRequesting {
@@ -163,7 +189,7 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		vector.DrawFilledCircle(screen, g.packetX, g.packetY, 5, color.RGBA{R: 0xff, G: 0, B: 0, A: 0xff}, false)
 	}
 
-	if g.animationStep == stepIdle {
+	if g.animationStep == stepIdle && g.AnimationType != "JOIN1" {
 		g.drawScaledText(screen, "Press Space to Start Animation", 393, screenHeight-40, color.White)
 	}
 }
@@ -225,7 +251,11 @@ func (g *Game) Layout(outsideWidth, outsideHeight int) (int, int) {
 func main() {
 	ebiten.SetWindowSize(screenWidth, screenHeight)
 	ebiten.SetWindowTitle("Spanner Distributed JOIN Animation")
-	if err := ebiten.RunGame(NewGame()); err != nil {
+	animationType := ""
+	if len(os.Args) > 1 {
+		animationType = os.Args[1]
+	}
+	if err := ebiten.RunGame(NewGame(animationType)); err != nil {
 		log.Fatal(err)
 	}
 }
