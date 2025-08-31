@@ -14,25 +14,27 @@ import (
 )
 
 const (
-	screenWidth  = 900
-	screenHeight = 600
+	screenWidth  = 1200
+	screenHeight = 1000
 
 	stepIdle = iota
 	stepRequesting
 	stepResponding
 	stepJoining
 	stepFinished
+
+	textScale = 24.0 / 13.0
 )
 
 type User struct {
-	ID   int
-	Name string
+	UserID int
+	Name   string
 }
 
 type Order struct {
-	ID     int
-	UserID int
-	Item   string
+	OrderID int
+	UserID  int
+	Item    string
 }
 
 type JoinedData struct {
@@ -57,14 +59,28 @@ type Game struct {
 func NewGame() *Game {
 	g := &Game{
 		Users: []User{
-			{ID: 1, Name: "Alice"},
-			{ID: 2, Name: "Bob"},
-			{ID: 3, Name: "Charlie"},
+			{UserID: 1, Name: "Alice"},
+			{UserID: 2, Name: "Bob"},
+			{UserID: 3, Name: "Charlie"},
+			{UserID: 4, Name: "David"},
+			{UserID: 5, Name: "Eve"},
+			{UserID: 6, Name: "Frank"},
+			{UserID: 7, Name: "Grace"},
+			{UserID: 8, Name: "Heidi"},
+			{UserID: 9, Name: "Ivan"},
+			{UserID: 10, Name: "Judy"},
 		},
 		Orders: []Order{
-			{ID: 101, UserID: 2, Item: "Book"},
-			{ID: 102, UserID: 1, Item: "Pen"},
-			{ID: 103, UserID: 3, Item: "Note"},
+			{OrderID: 101, UserID: 2, Item: "Book"},
+			{OrderID: 102, UserID: 1, Item: "Pen"},
+			{OrderID: 103, UserID: 3, Item: "Note"},
+			{OrderID: 104, UserID: 4, Item: "Laptop"},
+			{OrderID: 105, UserID: 5, Item: "Mouse"},
+			{OrderID: 106, UserID: 6, Item: "Keyboard"},
+			{OrderID: 107, UserID: 7, Item: "Monitor"},
+			{OrderID: 108, UserID: 8, Item: "Webcam"},
+			{OrderID: 109, UserID: 9, Item: "HDMI Cable"},
+			{OrderID: 110, UserID: 10, Item: "USB Hub"},
 		},
 		animationStep:    stepIdle,
 		currentUserIndex: -1,
@@ -82,10 +98,10 @@ func (g *Game) startAnimation() {
 }
 
 func (g *Game) setPacketStartPosition() {
-	userY := 100 + g.currentUserIndex*20
-	g.packetX = 200
+	userY := 110 + g.currentUserIndex*30 + 12
+	g.packetX = 60
 	g.packetY = float32(userY)
-	g.packetTargetX = 460
+	g.packetTargetX = 510
 	g.packetTargetY = float32(userY)
 }
 
@@ -100,12 +116,12 @@ func (g *Game) Update() error {
 			g.animationStep = stepResponding
 			// Find matching order to set response packet path
 			for i, o := range g.Orders {
-				if o.UserID == g.Users[g.currentUserIndex].ID {
-					g.packetY = float32(100 + i*20)
+				if o.UserID == g.Users[g.currentUserIndex].UserID {
+					g.packetY = float32(110 + i*30 + 12)
 					break
 				}
 			}
-			g.packetTargetX = 200
+			g.packetTargetX = 60
 		}
 	} else if g.animationStep == stepResponding {
 		g.packetX -= g.packetSpeed
@@ -114,7 +130,7 @@ func (g *Game) Update() error {
 			g.showJoined = true
 			// Perform the join
 			for _, o := range g.Orders {
-				if o.UserID == g.Users[g.currentUserIndex].ID {
+				if o.UserID == g.Users[g.currentUserIndex].UserID {
 					g.Joined = append(g.Joined, JoinedData{User: g.Users[g.currentUserIndex], Order: o})
 					break
 				}
@@ -133,6 +149,8 @@ func (g *Game) Update() error {
 			}
 		default:
 		}
+	} else if g.animationStep == stepFinished {
+		g.startAnimation()
 	}
 	return nil
 }
@@ -146,31 +164,46 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	}
 
 	if g.animationStep == stepIdle {
-		text.Draw(screen, "Press Space to Start Animation", basicfont.Face7x13, screenWidth/2-120, screenHeight-30, color.White)
+		g.drawScaledText(screen, "Press Space to Start Animation", 393, screenHeight-40, color.White)
 	}
+}
+
+func (g *Game) drawScaledText(screen *ebiten.Image, str string, x, y int, clr color.Color) {
+	bounds := text.BoundString(basicfont.Face7x13, str)
+	w, h := bounds.Dx(), bounds.Dy()
+	if w == 0 || h == 0 {
+		return
+	}
+	offscreen := ebiten.NewImage(w, h)
+	text.Draw(offscreen, str, basicfont.Face7x13, -bounds.Min.X, -bounds.Min.Y, clr)
+
+	op := &ebiten.DrawImageOptions{}
+	op.GeoM.Scale(textScale, textScale)
+	op.GeoM.Translate(float64(x), float64(y))
+	screen.DrawImage(offscreen, op)
 }
 
 func (g *Game) drawTables(screen *ebiten.Image) {
 	// Draw User Table
-	vector.DrawFilledRect(screen, 50, 50, 300, 400, color.RGBA{R: 0x30, G: 0x30, B: 0x30, A: 0xff}, false)
-	text.Draw(screen, "Machine 1: User Table", basicfont.Face7x13, 60, 70, color.White)
+	vector.DrawFilledRect(screen, 50, 50, 400, 450, color.RGBA{R: 0x30, G: 0x30, B: 0x30, A: 0xff}, false)
+	g.drawScaledText(screen, "Machine 1: User Table", 60, 60, color.White)
 	for i, u := range g.Users {
 		var c color.Color = color.White
 		if g.animationStep > stepIdle && g.currentUserIndex == i {
 			c = color.RGBA{R: 0xff, G: 0xff, B: 0, A: 0xff} // Yellow
 		}
-		text.Draw(screen, fmt.Sprintf("ID: %d, Name: %s", u.ID, u.Name), basicfont.Face7x13, 60, 100+i*20, c)
+		g.drawScaledText(screen, fmt.Sprintf("UserID: %d, Name: %s", u.UserID, u.Name), 60, 110+i*30, c)
 	}
 
 	// Draw Order Table
-	vector.DrawFilledRect(screen, 450, 50, 300, 400, color.RGBA{R: 0x30, G: 0x30, B: 0x30, A: 0xff}, false)
-	text.Draw(screen, "Machine 2: Order Table", basicfont.Face7x13, 460, 70, color.White)
+	vector.DrawFilledRect(screen, 500, 50, 650, 450, color.RGBA{R: 0x30, G: 0x30, B: 0x30, A: 0xff}, false)
+	g.drawScaledText(screen, "Machine 2: Order Table", 510, 60, color.White)
 	for i, o := range g.Orders {
 		var c color.Color = color.White
-		if g.currentUserIndex >= 0 && g.currentUserIndex < len(g.Users) && (g.animationStep == stepResponding || g.animationStep == stepJoining) && g.Users[g.currentUserIndex].ID == o.UserID {
+		if g.currentUserIndex >= 0 && g.currentUserIndex < len(g.Users) && (g.animationStep == stepResponding || g.animationStep == stepJoining) && g.Users[g.currentUserIndex].UserID == o.UserID {
 			c = color.RGBA{R: 0xff, G: 0xff, B: 0, A: 0xff} // Yellow
 		}
-		text.Draw(screen, fmt.Sprintf("ID: %d, UserID: %d, Item: %s", o.ID, o.UserID, o.Item), basicfont.Face7x13, 460, 100+i*20, c)
+		g.drawScaledText(screen, fmt.Sprintf("OrderID: %d, UserID: %d, Item: %s", o.OrderID, o.UserID, o.Item), 510, 110+i*30, c)
 	}
 }
 
@@ -178,10 +211,10 @@ func (g *Game) drawJoinedTable(screen *ebiten.Image) {
 	if !g.showJoined {
 		return
 	}
-	vector.DrawFilledRect(screen, 50, 460, 700, 130, color.RGBA{R: 0x30, G: 0x30, B: 0x60, A: 0xff}, false)
-	text.Draw(screen, "JOIN Result", basicfont.Face7x13, 60, 480, color.White)
+	vector.DrawFilledRect(screen, 50, 520, 1100, 450, color.RGBA{R: 0x30, G: 0x30, B: 0x60, A: 0xff}, false)
+	g.drawScaledText(screen, "JOIN Result", 60, 530, color.White)
 	for i, j := range g.Joined {
-		text.Draw(screen, fmt.Sprintf("UserID: %d, Name: %s, Item: %s", j.User.ID, j.User.Name, j.Order.Item), basicfont.Face7x13, 60, 510+i*20, color.White)
+		g.drawScaledText(screen, fmt.Sprintf("UserID: %d, Name: %s, OrderID: %d, Item: %s", j.User.UserID, j.User.Name, j.Order.OrderID, j.Order.Item), 60, 580+i*30, color.White)
 	}
 }
 
