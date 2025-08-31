@@ -54,14 +54,13 @@ type Game struct {
 
 	animationStep                int
 	currentUserIndex             int
-	currentUserMachineIndex      int
-	currentOrderMachineIndex     int
-	currentOrderIndex            int
+	currentOrderMachineIndex     [2]int
+	currentOrderIndex            [2]int
 	animationTimer               *time.Ticker
-	packetX, packetY             float32
-	packetStartX, packetStartY   float32
-	packetTargetX, packetTargetY float32
-	packetSpeedX, packetSpeedY   float32
+	packetX, packetY             [2]float32
+	packetStartX, packetStartY   [2]float32
+	packetTargetX, packetTargetY [2]float32
+	packetSpeedX, packetSpeedY   [2]float32
 	packetSpeed                  float32
 	showJoined                   bool
 	AnimationType                string
@@ -184,7 +183,6 @@ func NewGameJOIN2(animationType string) *Game {
 func (g *Game) startAnimation() {
 	g.animationStep = stepRequesting
 	g.currentUserIndex = 0
-	g.currentUserMachineIndex = 0
 	g.Joined = []JoinedData{}
 	g.animationTimer = time.NewTicker(500 * time.Millisecond)
 	g.setPacketStartPosition()
@@ -196,10 +194,12 @@ func (g *Game) setPacketStartPosition() {
 		return
 	}
 	userY := 110 + g.currentUserIndex*30 + 12
-	g.packetX = 60
-	g.packetY = float32(userY)
-	g.packetTargetX = 510
-	g.packetTargetY = float32(userY)
+	// JOIN1 is not a multi-packet animation
+	// To avoid complexity, we use the first element of the packet arrays
+	g.packetX[0] = 60
+	g.packetY[0] = float32(userY)
+	g.packetTargetX[0] = 510
+	g.packetTargetY[0] = float32(userY)
 }
 
 func (g *Game) Update() error {
@@ -219,20 +219,20 @@ func (g *Game) updateJOIN1() error {
 	}
 
 	if g.animationStep == stepRequesting {
-		g.packetX += g.packetSpeed
-		if g.packetX >= g.packetTargetX {
+		g.packetX[0] += g.packetSpeed
+		if g.packetX[0] >= g.packetTargetX[0] {
 			g.animationStep = stepResponding
 			for i, o := range g.Orders {
 				if o.UserID == g.Users[g.currentUserIndex].UserID {
-					g.packetY = float32(110 + i*30 + 12)
+					g.packetY[0] = float32(110 + i*30 + 12)
 					break
 				}
 			}
-			g.packetTargetX = 60
+			g.packetTargetX[0] = 60
 		}
 	} else if g.animationStep == stepResponding {
-		g.packetX -= g.packetSpeed
-		if g.packetX <= g.packetTargetX {
+		g.packetX[0] -= g.packetSpeed
+		if g.packetX[0] <= g.packetTargetX[0] {
 			g.animationStep = stepJoining
 			g.showJoined = true
 			for _, o := range g.Orders {
@@ -274,7 +274,7 @@ func (g *Game) drawJOIN1(screen *ebiten.Image) {
 	g.drawJoinedTable(screen)
 
 	if g.animationStep == stepRequesting || g.animationStep == stepResponding {
-		vector.DrawFilledCircle(screen, g.packetX, g.packetY, 5, color.RGBA{R: 0xff, G: 0, B: 0, A: 0xff}, false)
+		vector.DrawFilledCircle(screen, g.packetX[0], g.packetY[0], 5, color.RGBA{R: 0xff, G: 0, B: 0, A: 0xff}, false)
 	}
 
 	if g.animationStep == stepIdle && g.AnimationType != "JOIN1" {
@@ -335,16 +335,18 @@ func (g *Game) drawJoinedTable(screen *ebiten.Image) {
 // JOIN2 specific functions
 
 func (g *Game) setPacketStartPositionJOIN2() {
-	userTableYOffset := float32(50)
-	if g.currentUserMachineIndex == 1 {
-		userTableYOffset = 350
-	}
-	userY := userTableYOffset + 60 + float32(g.currentUserIndex*30) + 12
+	for i := 0; i < 2; i++ {
+		userTableYOffset := float32(50)
+		if i == 1 {
+			userTableYOffset = 350
+		}
+		userY := userTableYOffset + 60 + float32(g.currentUserIndex*30) + 12
 
-	g.packetX = 450 // Right edge of user tables
-	g.packetY = userY
-	g.packetStartX = g.packetX
-	g.packetStartY = g.packetY
+		g.packetX[i] = 450 // Right edge of user tables
+		g.packetY[i] = userY
+		g.packetStartX[i] = g.packetX[i]
+		g.packetStartY[i] = g.packetY[i]
+	}
 }
 
 func (g *Game) updateJOIN2() error {
@@ -357,73 +359,72 @@ func (g *Game) updateJOIN2() error {
 	}
 
 	if g.animationStep == stepRequesting {
-		// Find a match
-		foundMatch := false
-		currentUser := g.UserMachines[g.currentUserMachineIndex][g.currentUserIndex]
-		for orderMachineIndex, orderMachine := range g.OrderMachines {
-			for orderIndex, order := range orderMachine {
-				if currentUser.UserID == order.UserID {
-					g.currentOrderMachineIndex = orderMachineIndex
-					g.currentOrderIndex = orderIndex
-					orderTableYOffset := float32(50)
-					if orderMachineIndex == 1 {
-						orderTableYOffset = 350
+		for i := 0; i < 2; i++ {
+			foundMatch := false
+			currentUser := g.UserMachines[i][g.currentUserIndex]
+			for orderMachineIndex, orderMachine := range g.OrderMachines {
+				for orderIndex, order := range orderMachine {
+					if currentUser.UserID == order.UserID {
+						g.currentOrderMachineIndex[i] = orderMachineIndex
+						g.currentOrderIndex[i] = orderIndex
+						orderTableYOffset := float32(50)
+						if orderMachineIndex == 1 {
+							orderTableYOffset = 350
+						}
+						g.packetTargetX[i] = 750 // Left edge of order tables
+						g.packetTargetY[i] = orderTableYOffset + 60 + float32(orderIndex*30) + 12
+
+						deltaX := g.packetTargetX[i] - g.packetStartX[i]
+						deltaY := g.packetTargetY[i] - g.packetStartY[i]
+						distance := float32(math.Sqrt(float64(deltaX*deltaX + deltaY*deltaY)))
+						if distance > 0 {
+							g.packetSpeedX[i] = g.packetSpeed * deltaX / distance
+							g.packetSpeedY[i] = g.packetSpeed * deltaY / distance
+						}
+
+						foundMatch = true
+						break
 					}
-					g.packetTargetX = 750 // Left edge of order tables
-					g.packetTargetY = orderTableYOffset + 60 + float32(orderIndex*30) + 12
-
-					deltaX := g.packetTargetX - g.packetStartX
-					deltaY := g.packetTargetY - g.packetStartY
-					distance := float32(math.Sqrt(float64(deltaX*deltaX + deltaY*deltaY)))
-					g.packetSpeedX = g.packetSpeed * deltaX / distance
-					g.packetSpeedY = g.packetSpeed * deltaY / distance
-
-					foundMatch = true
+				}
+				if foundMatch {
 					break
 				}
-			}
-			if foundMatch {
-				break
 			}
 		}
 		g.animationStep = stepResponding
 
 	} else if g.animationStep == stepResponding {
-		g.packetX += g.packetSpeedX
-		g.packetY += g.packetSpeedY
+		packetsFinished := 0
+		for i := 0; i < 2; i++ {
+			g.packetX[i] += g.packetSpeedX[i]
+			g.packetY[i] += g.packetSpeedY[i]
 
-		dx1 := g.packetX - g.packetStartX
-		dy1 := g.packetY - g.packetStartY
-		dx2 := g.packetTargetX - g.packetStartX
-		dy2 := g.packetTargetY - g.packetStartY
+			dx1 := g.packetX[i] - g.packetStartX[i]
+			dy1 := g.packetY[i] - g.packetStartY[i]
+			dx2 := g.packetTargetX[i] - g.packetStartX[i]
+			dy2 := g.packetTargetY[i] - g.packetStartY[i]
 
-		if dx1*dx1+dy1*dy1 >= dx2*dx2+dy2*dy2 {
+			if dx1*dx1+dy1*dy1 >= dx2*dx2+dy2*dy2 {
+				packetsFinished++
+			}
+		}
+
+		if packetsFinished == 2 {
 			g.animationStep = stepJoining
 			g.showJoined = true
-			currentUser := g.UserMachines[g.currentUserMachineIndex][g.currentUserIndex]
-			for _, orderMachine := range g.OrderMachines {
-				for _, order := range orderMachine {
-					if currentUser.UserID == order.UserID {
-						g.Joined = append(g.Joined, JoinedData{User: currentUser, Order: order})
-						break
-					}
-				}
+			for i := 0; i < 2; i++ {
+				currentUser := g.UserMachines[i][g.currentUserIndex]
+				order := g.OrderMachines[g.currentOrderMachineIndex[i]][g.currentOrderIndex[i]]
+				g.Joined = append(g.Joined, JoinedData{User: currentUser, Order: order})
 			}
 		}
 	} else if g.animationStep == stepJoining {
 		select {
 		case <-g.animationTimer.C:
 			g.currentUserIndex++
-			if g.currentUserIndex >= len(g.UserMachines[g.currentUserMachineIndex]) {
-				g.currentUserIndex = 0
-				g.currentUserMachineIndex++
-				if g.currentUserMachineIndex >= len(g.UserMachines) {
-					g.animationStep = stepFinished
-					g.animationTimer.Stop()
-				} else {
-					g.animationStep = stepRequesting
-					g.setPacketStartPosition()
-				}
+			if g.currentUserIndex >= len(g.UserMachines[0]) {
+				g.animationStep = stepFinished
+				g.animationTimer.Stop()
 			} else {
 				g.animationStep = stepRequesting
 				g.setPacketStartPosition()
@@ -441,7 +442,9 @@ func (g *Game) drawJOIN2(screen *ebiten.Image) {
 	g.drawJoinedTableJOIN2(screen)
 
 	if g.animationStep == stepResponding {
-		vector.DrawFilledCircle(screen, g.packetX, g.packetY, 5, color.RGBA{R: 0xff, G: 0, B: 0, A: 0xff}, false)
+		for i := 0; i < 2; i++ {
+			vector.DrawFilledCircle(screen, g.packetX[i], g.packetY[i], 5, color.RGBA{R: 0xff, G: 0, B: 0, A: 0xff}, false)
+		}
 	}
 
 	if g.animationStep == stepIdle && g.AnimationType != "JOIN2" {
@@ -463,7 +466,7 @@ func (g *Game) drawTablesJOIN2(screen *ebiten.Image) {
 		}
 		for i, u := range machine {
 			var c color.Color = color.White
-			if g.animationStep > stepIdle && g.currentUserMachineIndex == machineIndex && g.currentUserIndex == i {
+			if g.animationStep > stepIdle && g.currentUserIndex == i {
 				c = color.RGBA{R: 0xff, G: 0xff, B: 0, A: 0xff} // Yellow
 			}
 			g.drawScaledText(screen, fmt.Sprintf("UserID: %d, Name: %s", u.UserID, u.Name), 60, tableYOffset+60+i*30, c)
@@ -483,8 +486,10 @@ func (g *Game) drawTablesJOIN2(screen *ebiten.Image) {
 		}
 		for i, o := range machine {
 			var c color.Color = color.White
-			if g.animationStep > stepRequesting && g.currentOrderMachineIndex == machineIndex && g.currentOrderIndex == i {
-				c = color.RGBA{R: 0xff, G: 0xff, B: 0, A: 0xff} // Yellow
+			if g.animationStep > stepRequesting {
+				if (g.currentOrderMachineIndex[0] == machineIndex && g.currentOrderIndex[0] == i) || (g.currentOrderMachineIndex[1] == machineIndex && g.currentOrderIndex[1] == i) {
+					c = color.RGBA{R: 0xff, G: 0xff, B: 0, A: 0xff} // Yellow
+				}
 			}
 			g.drawScaledText(screen, fmt.Sprintf("OrderID: %d, UserID: %d, Item: %s", o.OrderID, o.UserID, o.Item), 760, tableYOffset+60+i*30, c)
 		}
