@@ -27,7 +27,10 @@ const (
 	stepJoining
 	stepFinished
 
-	// JOIN3 specific steps
+	// JOIN1 & JOIN2 specific
+	stepScanningOrderTable
+
+	// JOIN3 specific
 	stepUserToIndexRequest
 	stepUserToIndexResponse
 	stepIndexToOrderRequest
@@ -75,6 +78,9 @@ type Game struct {
 
 	// State
 	currentUserIndex         int
+	currentUserMachineIndex  int
+	orderScanIndex           [2]int
+	matchFound               [2]bool
 	currentOrderMachineIndex [2]int
 	currentOrderIndex        [2]int
 	currentIndexMachineIndex [2]int
@@ -209,8 +215,9 @@ func (g *Game) startAnimation() {
 		g.animationStep = stepRequesting
 	}
 	g.currentUserIndex = 0
+	g.currentUserMachineIndex = 0
 	g.Joined = []JoinedData{}
-	g.animationTimer = time.NewTicker(500 * time.Millisecond)
+	g.animationTimer = time.NewTicker(200 * time.Millisecond)
 	g.setPacketStartPosition()
 }
 
@@ -262,34 +269,53 @@ func (g *Game) updateJOIN1() error {
 			}
 		}
 	}
-	if g.animationStep == stepRequesting {
+	switch g.animationStep {
+	case stepRequesting:
+		g.packetTargetX[0] = 560
+		g.packetTargetY[0] = 110 + 12
+		g.setupPacket(0)
+		g.animationStep = stepResponding
+	case stepResponding:
+		if g.movePacket(0) {
+			g.animationStep = stepScanningOrderTable
+			g.orderScanIndex[0] = 0
+			g.packetY[0] = 110 + float32(g.orderScanIndex[0]*30) + 12
+		}
+	case stepScanningOrderTable:
+		select {
+		case <-g.animationTimer.C:
+			currentUser := g.Users[g.currentUserIndex]
+			if g.orderScanIndex[0] < len(g.Orders) {
+				if g.Orders[g.orderScanIndex[0]].UserID == currentUser.UserID {
+					g.animationStep = stepJoining
+					return nil
+				}
+				g.orderScanIndex[0]++
+				if g.orderScanIndex[0] < len(g.Orders) {
+					g.packetY[0] = 110 + float32(g.orderScanIndex[0]*30) + 12
+				} else {
+					g.animationStep = stepJoining // Not found
+				}
+			} else {
+				g.animationStep = stepJoining // Not found
+			}
+		default:
+		}
+	case stepJoining:
+		g.showJoined = true
 		found := false
 		for i, o := range g.Orders {
 			if o.UserID == g.Users[g.currentUserIndex].UserID {
-				g.packetTargetX[0] = 550
-				g.packetTargetY[0] = 110 + float32(i*30) + 12
-				g.setupPacket(0)
+				g.Joined = append(g.Joined, JoinedData{User: g.Users[g.currentUserIndex], Order: o})
+				g.orderScanIndex[0] = i
 				found = true
 				break
 			}
 		}
-		if found {
-			g.animationStep = stepResponding
+		if !found {
+			g.orderScanIndex[0] = -1 // Indicate not found
 		}
-	} else if g.animationStep == stepResponding {
-		if g.movePacket(0) {
-			g.animationStep = stepJoining
-			g.showJoined = true
-			for _, o := range g.Orders {
-				if o.UserID == g.Users[g.currentUserIndex].UserID {
-					g.Joined = append(g.Joined, JoinedData{User: g.Users[g.currentUserIndex], Order: o})
-					break
-				}
-			}
-		}
-	} else if g.animationStep == stepJoining {
-		select {
-		case <-g.animationTimer.C:
+		time.AfterFunc(300*time.Millisecond, func() {
 			g.currentUserIndex++
 			if g.currentUserIndex >= len(g.Users) {
 				g.animationStep = stepFinished
@@ -297,9 +323,10 @@ func (g *Game) updateJOIN1() error {
 				g.animationStep = stepRequesting
 				g.setPacketStartPosition()
 			}
-		default:
-		}
-	} else if g.animationStep == stepFinished {
+		})
+		g.animationStep = -1 // Pause while timer runs
+
+	case stepFinished:
 		g.startAnimation()
 	}
 	return nil
@@ -311,33 +338,15 @@ func (g *Game) updateJOIN2() error {
 			g.startAnimation()
 		}
 	}
-	if g.animationStep == stepRequesting {
+	switch g.animationStep {
+	case stepRequesting:
 		for i := 0; i < 2; i++ {
-			foundMatch := false
-			currentUser := g.UserMachines[i][g.currentUserIndex]
-			for orderMachineIndex, orderMachine := range g.OrderMachines {
-				for orderIndex, order := range orderMachine {
-					if currentUser.UserID == order.UserID {
-						g.currentOrderMachineIndex[i] = orderMachineIndex
-						g.currentOrderIndex[i] = orderIndex
-						orderTableYOffset := float32(50)
-						if orderMachineIndex == 1 {
-							orderTableYOffset = 350
-						}
-						g.packetTargetX[i] = 750
-						g.packetTargetY[i] = orderTableYOffset + 60 + float32(orderIndex*30) + 12
-						g.setupPacket(i)
-						foundMatch = true
-						break
-					}
-				}
-				if foundMatch {
-					break
-				}
-			}
+			g.packetTargetX[i] = 760
+			g.packetTargetY[i] = float32(50+60+12) + float32(i*300)
+			g.setupPacket(i)
 		}
 		g.animationStep = stepResponding
-	} else if g.animationStep == stepResponding {
+	case stepResponding:
 		packetsFinished := 0
 		for i := 0; i < 2; i++ {
 			if g.movePacket(i) {
@@ -345,17 +354,54 @@ func (g *Game) updateJOIN2() error {
 			}
 		}
 		if packetsFinished == 2 {
-			g.animationStep = stepJoining
-			g.showJoined = true
+			g.animationStep = stepScanningOrderTable
+			g.orderScanIndex = [2]int{0, 0}
+			g.matchFound = [2]bool{false, false}
 			for i := 0; i < 2; i++ {
+				g.packetY[i] = float32(50+60+12) + float32(i*300)
+			}
+		}
+	case stepScanningOrderTable:
+		select {
+		case <-g.animationTimer.C:
+			for i := 0; i < 2; i++ {
+				if g.matchFound[i] {
+					continue
+				}
+				currentUser := g.UserMachines[i][g.currentUserIndex]
+				if g.orderScanIndex[i] < len(g.OrderMachines[i]) {
+					if g.OrderMachines[i][g.orderScanIndex[i]].UserID == currentUser.UserID {
+						g.matchFound[i] = true
+						g.currentOrderMachineIndex[i] = i
+						g.currentOrderIndex[i] = g.orderScanIndex[i]
+					} else {
+						g.orderScanIndex[i]++
+						if g.orderScanIndex[i] < len(g.OrderMachines[i]) {
+							g.packetY[i] = float32(50+60+g.orderScanIndex[i]*30+12) + float32(i*300)
+						} else {
+							g.matchFound[i] = true // Not found
+						}
+					}
+				} else {
+					g.matchFound[i] = true // Not found
+				}
+			}
+			if g.matchFound[0] && g.matchFound[1] {
+				g.animationStep = stepJoining
+			}
+		default:
+		}
+	case stepJoining:
+		g.showJoined = true
+		for i := 0; i < 2; i++ {
+			// Check if a match was found before appending
+			if g.currentOrderIndex[i] != 0 || g.OrderMachines[g.currentOrderMachineIndex[i]][g.currentOrderIndex[i]].UserID == g.UserMachines[i][g.currentUserIndex].UserID {
 				currentUser := g.UserMachines[i][g.currentUserIndex]
 				order := g.OrderMachines[g.currentOrderMachineIndex[i]][g.currentOrderIndex[i]]
 				g.Joined = append(g.Joined, JoinedData{User: currentUser, Order: order})
 			}
 		}
-	} else if g.animationStep == stepJoining {
-		select {
-		case <-g.animationTimer.C:
+		time.AfterFunc(300*time.Millisecond, func() {
 			g.currentUserIndex++
 			if g.currentUserIndex >= len(g.UserMachines[0]) {
 				g.animationStep = stepFinished
@@ -363,9 +409,9 @@ func (g *Game) updateJOIN2() error {
 				g.animationStep = stepRequesting
 				g.setPacketStartPosition()
 			}
-		default:
-		}
-	} else if g.animationStep == stepFinished {
+		})
+		g.animationStep = -1 // Pause
+	case stepFinished:
 		g.startAnimation()
 	}
 	return nil
@@ -494,7 +540,7 @@ func (g *Game) updateJOIN3() error {
 func (g *Game) drawJOIN1(screen *ebiten.Image) {
 	g.drawTablesJOIN1(screen)
 	g.drawJoinedTable(screen, 520)
-	if g.animationStep == stepResponding {
+	if g.animationStep == stepResponding || g.animationStep == stepScanningOrderTable {
 		vector.DrawFilledCircle(screen, g.packetX[0], g.packetY[0], 5, color.RGBA{R: 0xff, A: 0xff}, false)
 	}
 	if g.animationStep == stepIdle {
@@ -505,7 +551,7 @@ func (g *Game) drawJOIN1(screen *ebiten.Image) {
 func (g *Game) drawJOIN2(screen *ebiten.Image) {
 	g.drawTablesJOIN2(screen)
 	g.drawJoinedTable(screen, 650)
-	if g.animationStep == stepResponding {
+	if g.animationStep == stepResponding || g.animationStep == stepScanningOrderTable {
 		for i := 0; i < 2; i++ {
 			vector.DrawFilledCircle(screen, g.packetX[i], g.packetY[i], 5, color.RGBA{R: 0xff, A: 0xff}, false)
 		}
@@ -539,9 +585,13 @@ func (g *Game) drawTablesJOIN1(screen *ebiten.Image) {
 	g.drawScaledText(screen, "Order Table", 560, 60, color.White)
 	for i, o := range g.Orders {
 		var c color.Color = color.White
-		if g.animationStep == stepResponding || g.animationStep == stepJoining {
-			if o.UserID == g.Users[g.currentUserIndex].UserID {
-				c = color.RGBA{R: 0xff, G: 0xff, A: 0xff}
+		if g.animationStep == stepScanningOrderTable {
+			if i == g.orderScanIndex[0] {
+				c = color.RGBA{B: 0xff, A: 0xff} // Blue for scanning
+			}
+		} else if g.animationStep == stepJoining {
+			if i == g.orderScanIndex[0] {
+				c = color.RGBA{R: 0xff, G: 0xff, A: 0xff} // Yellow for found
 			}
 		}
 		g.drawScaledText(screen, fmt.Sprintf("OrderID: %d, UserID: %d, Item: %s", o.OrderID, o.UserID, o.Item), 560, 110+i*30, c)
@@ -570,10 +620,13 @@ func (g *Game) drawTablesJOIN2(screen *ebiten.Image) {
 		g.drawScaledText(screen, fmt.Sprintf("Order Machine %d", i+1), 760, int(yOffset)+10, color.White)
 		for j, o := range g.OrderMachines[i] {
 			var c color.Color = color.White
-			if g.animationStep > stepRequesting {
-				if (g.currentOrderMachineIndex[0] == i && g.currentOrderIndex[0] == j) || (g.currentOrderMachineIndex[1] == i && g.currentOrderIndex[1] == j) {
-					c = color.RGBA{R: 0xff, G: 0xff, A: 0xff} // Yellow
+			if g.animationStep == stepScanningOrderTable {
+				if !g.matchFound[i] && j == g.orderScanIndex[i] {
+					c = color.RGBA{B: 0xff, A: 0xff} // Blue
 				}
+			}
+			if g.matchFound[i] && j == g.currentOrderIndex[i] {
+				c = color.RGBA{R: 0xff, G: 0xff, A: 0xff} // Yellow
 			}
 			g.drawScaledText(screen, fmt.Sprintf("OrderID: %d, UserID: %d, Item: %s", o.OrderID, o.UserID, o.Item), 760, int(yOffset)+60+j*30, c)
 		}
@@ -695,13 +748,18 @@ func (g *Game) setupPacket(i int) {
 }
 
 func (g *Game) movePacket(i int) bool {
+	// Check if the packet has moved past the target
+	dx_total := g.packetTargetX[i] - g.packetStartX[i]
+	dy_total := g.packetTargetY[i] - g.packetStartY[i]
+	dx_moved := g.packetX[i] - g.packetStartX[i]
+	dy_moved := g.packetY[i] - g.packetStartY[i]
+	if dx_total*dx_total+dy_total*dy_total <= dx_moved*dx_moved+dy_moved*dy_moved {
+		return true
+	}
+
 	g.packetX[i] += g.packetSpeedX[i]
 	g.packetY[i] += g.packetSpeedY[i]
-	dx1 := g.packetX[i] - g.packetStartX[i]
-	dy1 := g.packetY[i] - g.packetStartY[i]
-	dx2 := g.packetTargetX[i] - g.packetStartX[i]
-	dy2 := g.packetTargetY[i] - g.packetStartY[i]
-	return dx1*dx1+dy1*dy1 >= dx2*dx2+dy2*dy2
+	return false
 }
 
 func (g *Game) drawScaledText(screen *ebiten.Image, str string, x, y int, clr color.Color) {
