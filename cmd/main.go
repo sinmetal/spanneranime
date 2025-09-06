@@ -257,7 +257,7 @@ func NewGameGROUPBY1(animationType string) *Game {
 	g := &Game{
 		OrderMachines: orderMachines,
 		animationStep: stepIdle,
-		packetSpeed:   8, // Slower speed
+		packetSpeed:   4, // Slower speed
 		AnimationType: animationType,
 	}
 	return g
@@ -599,7 +599,8 @@ func (g *Game) updateGROUPBY1() error {
 			} else {
 				g.packetTargetX[i] = 1200
 			}
-			g.packetTargetY[i] = 525 // Middle layer y
+			g.packetTargetY[i] = 525                                          // Middle layer y
+			g.packetX[i], g.packetY[i] = g.packetStartX[i], g.packetStartY[i] // Set initial position
 			g.setupPacket(i)
 		}
 		g.animationStep = stepRespondingToMiddleLayer
@@ -666,9 +667,10 @@ func (g *Game) updateGROUPBY1() error {
 			} else {
 				g.packetStartX[i] = 1200
 			}
-			g.packetStartY[i] = 450  // Middle layer y
-			g.packetTargetX[i] = 800 // Top layer x
-			g.packetTargetY[i] = 275 // Top layer y
+			g.packetStartY[i] = 450                                           // Middle layer y
+			g.packetTargetX[i] = 800                                          // Top layer x
+			g.packetTargetY[i] = 275                                          // Top layer y
+			g.packetX[i], g.packetY[i] = g.packetStartX[i], g.packetStartY[i] // Set initial position
 			g.setupPacket(i)
 		}
 		for i := 2; i < 4; i++ {
@@ -917,7 +919,7 @@ func (g *Game) drawGROUPBY1(screen *ebiten.Image) {
 	// Packets
 	for i := 0; i < 4; i++ {
 		if g.packetActive[i] {
-			vector.DrawFilledCircle(screen, g.packetX[i], g.packetY[i], 5, color.RGBA{R: 0xff, A: 0xff}, false)
+			vector.DrawFilledCircle(screen, g.packetX[i], g.packetY[i], 10, color.RGBA{R: 0xff, A: 0xff}, false)
 		}
 	}
 
