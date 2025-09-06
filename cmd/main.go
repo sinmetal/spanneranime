@@ -882,7 +882,7 @@ func (g *Game) drawGROUPBY1(screen *ebiten.Image) {
 	for i := 0; i < 4; i++ {
 		x := float32(50 + i*400)
 		vector.DrawFilledRect(screen, x, 650, 350, 300, color.RGBA{R: 0x30, G: 0x30, B: 0x30, A: 0xff}, false)
-		g.drawScaledText(screen, fmt.Sprintf("Machine %d", i+1), int(x)+10, 660, color.White)
+		g.drawScaledText(screen, fmt.Sprintf("Split %d", i+1), int(x)+10, 660, color.White)
 		if g.animationStep <= stepGroupByBottomLayer {
 			g.drawScaledText(screen, "OrderID,UserID,Item,Price", int(x)+10, 690, color.White)
 			for j, order := range g.OrderMachines[i] {
