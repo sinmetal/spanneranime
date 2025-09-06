@@ -38,6 +38,20 @@ const (
 	stepIndexToOrderRequest
 	stepIndexToOrderResponse
 
+	// GROUPBY1 specific
+	stepGroupByBottomLayer
+	stepPauseBeforeSendToMiddleLayer
+	stepSendToMiddleLayer
+	stepRespondingToMiddleLayer
+	stepPauseBeforeGroupByMiddleLayer
+	stepGroupByMiddleLayer
+	stepPauseBeforeSendToTopLayer
+	stepSendToTopLayer
+	stepRespondingToTopLayer
+	stepPauseBeforeGroupByTopLayer
+	stepGroupByTopLayer
+	stepPauseBeforeRestart
+
 	textScale = 24.0 / 13.0
 )
 
@@ -50,6 +64,7 @@ type Order struct {
 	OrderID int
 	UserID  int
 	Item    string
+	Price   int
 }
 
 type IndexEntry struct {
@@ -60,6 +75,11 @@ type IndexEntry struct {
 type JoinedData struct {
 	User  User
 	Order Order
+}
+
+type AggregationResult struct {
+	Item  string
+	Price int
 }
 
 type Game struct {
@@ -75,8 +95,13 @@ type Game struct {
 	Users         []User
 	Orders        []Order
 	UserMachines  [2][]User
-	OrderMachines [2][]Order
+	OrderMachines [4][]Order // For GROUPBY1, 4 machines
 	IndexMachines [2][]IndexEntry
+
+	// GROUPBY1 specific data
+	BottomLayerResults [4][]AggregationResult
+	MiddleLayerResults [2][]AggregationResult
+	TopLayerResult     []AggregationResult
 
 	// State
 	currentUserIndex         int
@@ -90,11 +115,12 @@ type Game struct {
 	currentIndexMachineIndex [2]int
 	currentIndexIndex        [2]int
 
-	// Packets (up to 2)
-	packetX, packetY             [2]float32
-	packetStartX, packetStartY   [2]float32
-	packetTargetX, packetTargetY [2]float32
-	packetSpeedX, packetSpeedY   [2]float32
+	// Packets (up to 4 for GROUPBY1)
+	packetX, packetY             [4]float32
+	packetStartX, packetStartY   [4]float32
+	packetTargetX, packetTargetY [4]float32
+	packetSpeedX, packetSpeedY   [4]float32
+	packetActive                 [4]bool
 }
 
 // --- Game Setup ---
@@ -105,6 +131,8 @@ func NewGame(animationType string) *Game {
 		return NewGameJOIN2(animationType)
 	case "JOIN3":
 		return NewGameJOIN3(animationType)
+	case "GROUPBY1":
+		return NewGameGROUPBY1(animationType)
 	default:
 		return NewGameJOIN1(animationType)
 	}
@@ -128,7 +156,7 @@ func NewGameJOIN1(animationType string) *Game {
 	}
 	g := &Game{
 		Users:         users,
-		Orders:        orders,
+		Orders:        []Order{orders[0], orders[1], orders[2], orders[3], orders[4], orders[5], orders[6], orders[7], orders[8], orders[9]},
 		animationStep: stepIdle,
 		packetSpeed:   15,
 		AnimationType: animationType,
@@ -145,7 +173,7 @@ func NewGameJOIN2(animationType string) *Game {
 		{UserID: 6, Name: "Frank"}, {UserID: 7, Name: "Grace"}, {UserID: 8, Name: "Heidi"}, {UserID: 9, Name: "Ivan"}, {UserID: 10, Name: "Judy"},
 	}
 
-	orderMachines := [2][]Order{}
+	orderMachines := [4][]Order{}
 	orderMachines[0] = make([]Order, 5)
 	orderMachines[1] = make([]Order, 5)
 	userIDs := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
@@ -175,7 +203,7 @@ func NewGameJOIN3(animationType string) *Game {
 		{UserID: 6, Name: "Frank"}, {UserID: 7, Name: "Grace"}, {UserID: 8, Name: "Heidi"}, {UserID: 9, Name: "Ivan"}, {UserID: 10, Name: "Judy"},
 	}
 
-	orderMachines := [2][]Order{}
+	orderMachines := [4][]Order{}
 	orderMachines[0] = make([]Order, 5)
 	orderMachines[1] = make([]Order, 5)
 	userIDs := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
@@ -210,11 +238,41 @@ func NewGameJOIN3(animationType string) *Game {
 	return g
 }
 
+func NewGameGROUPBY1(animationType string) *Game {
+	rand.Seed(time.Now().UnixNano())
+	orderMachines := [4][]Order{}
+	items := []string{"Apple", "Banana", "Cherry"}
+	for i := 0; i < 4; i++ {
+		orderMachines[i] = make([]Order, 10)
+		for j := 0; j < 10; j++ {
+			orderMachines[i][j] = Order{
+				OrderID: 1000 + i*10 + j,
+				UserID:  rand.Intn(100),
+				Item:    items[rand.Intn(len(items))],
+				Price:   100 + rand.Intn(900),
+			}
+		}
+	}
+
+	g := &Game{
+		OrderMachines: orderMachines,
+		animationStep: stepIdle,
+		packetSpeed:   8, // Slower speed
+		AnimationType: animationType,
+	}
+	return g
+}
+
 // --- Core Logic ---
 
 func (g *Game) startAnimation() {
 	if g.AnimationType == "JOIN3" {
 		g.animationStep = stepUserToIndexRequest
+	} else if g.AnimationType == "GROUPBY1" {
+		g.animationStep = stepGroupByBottomLayer
+		g.BottomLayerResults = [4][]AggregationResult{}
+		g.MiddleLayerResults = [2][]AggregationResult{}
+		g.TopLayerResult = []AggregationResult{}
 	} else {
 		g.animationStep = stepRequesting
 	}
@@ -231,6 +289,8 @@ func (g *Game) Update() error {
 		return g.updateJOIN2()
 	case "JOIN3":
 		return g.updateJOIN3()
+	case "GROUPBY1":
+		return g.updateGROUPBY1()
 	default: // JOIN1 and empty
 		return g.updateJOIN1()
 	}
@@ -242,6 +302,8 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		g.drawJOIN2(screen)
 	case "JOIN3":
 		g.drawJOIN3(screen)
+	case "GROUPBY1":
+		g.drawGROUPBY1(screen)
 	default: // JOIN1 and empty
 		g.drawJOIN1(screen)
 	}
@@ -497,6 +559,169 @@ func (g *Game) updateJOIN2() error {
 	return nil
 }
 
+func (g *Game) updateGROUPBY1() error {
+	if g.animationStep == stepIdle {
+		if g.AnimationType == "GROUPBY1" {
+			if inpututil.IsKeyJustPressed(ebiten.KeySpace) {
+				g.startAnimation()
+			}
+		}
+	}
+	switch g.animationStep {
+	case stepGroupByBottomLayer:
+		for i := 0; i < 4; i++ {
+			result := make(map[string]int)
+			for _, order := range g.OrderMachines[i] {
+				result[order.Item] += order.Price
+			}
+			var agg []AggregationResult
+			for item, price := range result {
+				agg = append(agg, AggregationResult{Item: item, Price: price})
+			}
+			sort.Slice(agg, func(i, j int) bool { return agg[i].Item < agg[j].Item })
+			g.BottomLayerResults[i] = agg
+		}
+		g.animationStep = stepPauseBeforeSendToMiddleLayer
+		time.AfterFunc(2*time.Second, func() {
+			g.animationStep = stepSendToMiddleLayer
+		})
+	case stepPauseBeforeSendToMiddleLayer:
+		// Wait for timer
+	case stepSendToMiddleLayer:
+		// Setup packets from bottom to middle
+		for i := 0; i < 4; i++ {
+			g.packetActive[i] = true
+			g.packetStartX[i] = float32(50 + i*400 + 175) // Adjusted for 4 machines
+			g.packetStartY[i] = 650                       // Bottom layer y
+			// Route to middle layer machines
+			if i < 2 {
+				g.packetTargetX[i] = 400
+			} else {
+				g.packetTargetX[i] = 1200
+			}
+			g.packetTargetY[i] = 525 // Middle layer y
+			g.setupPacket(i)
+		}
+		g.animationStep = stepRespondingToMiddleLayer
+	case stepRespondingToMiddleLayer:
+		packetsFinished := 0
+		for i := 0; i < 4; i++ {
+			if g.packetActive[i] {
+				if g.movePacket(i) {
+					g.packetActive[i] = false
+					packetsFinished++
+				}
+			} else {
+				packetsFinished++
+			}
+		}
+		if packetsFinished == 4 {
+			g.animationStep = stepPauseBeforeGroupByMiddleLayer
+			time.AfterFunc(1*time.Second, func() {
+				g.animationStep = stepGroupByMiddleLayer
+			})
+		}
+	case stepPauseBeforeGroupByMiddleLayer:
+		// Wait for timer
+	case stepGroupByMiddleLayer:
+		// Merge results in middle layer
+		result0 := make(map[string]int)
+		for i := 0; i < 2; i++ {
+			for _, res := range g.BottomLayerResults[i] {
+				result0[res.Item] += res.Price
+			}
+		}
+		var agg0 []AggregationResult
+		for item, price := range result0 {
+			agg0 = append(agg0, AggregationResult{Item: item, Price: price})
+		}
+		sort.Slice(agg0, func(i, j int) bool { return agg0[i].Item < agg0[j].Item })
+		g.MiddleLayerResults[0] = agg0
+
+		result1 := make(map[string]int)
+		for i := 2; i < 4; i++ {
+			for _, res := range g.BottomLayerResults[i] {
+				result1[res.Item] += res.Price
+			}
+		}
+		var agg1 []AggregationResult
+		for item, price := range result1 {
+			agg1 = append(agg1, AggregationResult{Item: item, Price: price})
+		}
+		sort.Slice(agg1, func(i, j int) bool { return agg1[i].Item < agg1[j].Item })
+		g.MiddleLayerResults[1] = agg1
+
+		g.animationStep = stepPauseBeforeSendToTopLayer
+		time.AfterFunc(2*time.Second, func() {
+			g.animationStep = stepSendToTopLayer
+		})
+	case stepPauseBeforeSendToTopLayer:
+		// Wait for timer
+	case stepSendToTopLayer:
+		// Setup packets from middle to top
+		for i := 0; i < 2; i++ {
+			g.packetActive[i] = true
+			if i == 0 {
+				g.packetStartX[i] = 400
+			} else {
+				g.packetStartX[i] = 1200
+			}
+			g.packetStartY[i] = 450  // Middle layer y
+			g.packetTargetX[i] = 800 // Top layer x
+			g.packetTargetY[i] = 275 // Top layer y
+			g.setupPacket(i)
+		}
+		for i := 2; i < 4; i++ {
+			g.packetActive[i] = false
+		}
+		g.animationStep = stepRespondingToTopLayer
+	case stepRespondingToTopLayer:
+		packetsFinished := 0
+		for i := 0; i < 2; i++ {
+			if g.packetActive[i] {
+				if g.movePacket(i) {
+					g.packetActive[i] = false
+					packetsFinished++
+				}
+			} else {
+				packetsFinished++
+			}
+		}
+		if packetsFinished == 2 {
+			g.animationStep = stepPauseBeforeGroupByTopLayer
+			time.AfterFunc(1*time.Second, func() {
+				g.animationStep = stepGroupByTopLayer
+			})
+		}
+	case stepPauseBeforeGroupByTopLayer:
+		// Wait for timer
+	case stepGroupByTopLayer:
+		// Merge results in top layer
+		result := make(map[string]int)
+		for _, res := range g.MiddleLayerResults[0] {
+			result[res.Item] += res.Price
+		}
+		for _, res := range g.MiddleLayerResults[1] {
+			result[res.Item] += res.Price
+		}
+		var agg []AggregationResult
+		for item, price := range result {
+			agg = append(agg, AggregationResult{Item: item, Price: price})
+		}
+		sort.Slice(agg, func(i, j int) bool { return agg[i].Item < agg[j].Item })
+		g.TopLayerResult = agg
+		g.animationStep = stepFinished
+	case stepFinished:
+		g.animationStep = stepPauseBeforeRestart
+		time.AfterFunc(3*time.Second, func() {
+			g.startAnimation()
+		})
+	case stepPauseBeforeRestart:
+		// Wait for timer
+	}
+	return nil
+}
+
 func (g *Game) updateJOIN3() error {
 	if g.animationStep == stepIdle {
 		if g.AnimationType == "JOIN3" {
@@ -647,6 +872,57 @@ func (g *Game) drawJOIN2(screen *ebiten.Image) {
 		for i := 0; i < 2; i++ {
 			vector.DrawFilledCircle(screen, g.packetX[i], g.packetY[i], 5, color.RGBA{R: 0xff, A: 0xff}, false)
 		}
+	}
+}
+
+func (g *Game) drawGROUPBY1(screen *ebiten.Image) {
+	// Bottom Layer (4 machines)
+	for i := 0; i < 4; i++ {
+		x := float32(50 + i*400)
+		vector.DrawFilledRect(screen, x, 650, 350, 300, color.RGBA{R: 0x30, G: 0x30, B: 0x30, A: 0xff}, false)
+		g.drawScaledText(screen, fmt.Sprintf("Machine %d", i+1), int(x)+10, 660, color.White)
+		if g.animationStep <= stepGroupByBottomLayer {
+			g.drawScaledText(screen, "OrderID,UserID,Item,Price", int(x)+10, 690, color.White)
+			for j, order := range g.OrderMachines[i] {
+				g.drawScaledText(screen, fmt.Sprintf("%d,%d,%s,%d", order.OrderID, order.UserID, order.Item, order.Price), int(x)+10, 715+j*25, color.White)
+			}
+		} else {
+			for j, res := range g.BottomLayerResults[i] {
+				g.drawScaledText(screen, fmt.Sprintf("%s: %d", res.Item, res.Price), int(x)+10, 690+j*25, color.RGBA{R: 0xff, G: 0xff, A: 0xff})
+			}
+		}
+	}
+
+	// Middle Layer (2 machines)
+	for i := 0; i < 2; i++ {
+		x := float32(200 + i*800)
+		vector.DrawFilledRect(screen, x, 450, 400, 150, color.RGBA{R: 0x30, G: 0x30, B: 0x60, A: 0xff}, false)
+		g.drawScaledText(screen, fmt.Sprintf("Mid-Tier %d", i+1), int(x)+10, 460, color.White)
+		if g.animationStep >= stepGroupByMiddleLayer {
+			for j, res := range g.MiddleLayerResults[i] {
+				g.drawScaledText(screen, fmt.Sprintf("%s: %d", res.Item, res.Price), int(x)+10, 490+j*25, color.White)
+			}
+		}
+	}
+
+	// Top Layer (1 machine)
+	vector.DrawFilledRect(screen, 600, 150, 400, 250, color.RGBA{R: 0x60, G: 0x30, B: 0x30, A: 0xff}, false)
+	g.drawScaledText(screen, "Top-Tier", 610, 160, color.White)
+	if g.animationStep >= stepGroupByTopLayer {
+		for i, res := range g.TopLayerResult {
+			g.drawScaledText(screen, fmt.Sprintf("%s: %d", res.Item, res.Price), 610, 190+i*25, color.White)
+		}
+	}
+
+	// Packets
+	for i := 0; i < 4; i++ {
+		if g.packetActive[i] {
+			vector.DrawFilledCircle(screen, g.packetX[i], g.packetY[i], 5, color.RGBA{R: 0xff, A: 0xff}, false)
+		}
+	}
+
+	if g.animationStep == stepIdle {
+		g.drawScaledText(screen, "Press Space to Start Animation", 594, screenHeight-40, color.White)
 	}
 }
 
@@ -810,6 +1086,8 @@ func (g *Game) setPacketStartPosition() {
 		g.setPacketStartPositionJOIN2()
 	case "JOIN3":
 		g.setPacketStartPositionJOIN3()
+	case "GROUPBY1":
+		// No packets to set at start
 	default: // JOIN1
 		userY := 110 + float32(g.currentUserIndex*30) + 12
 		g.packetX[0] = 450
