@@ -276,10 +276,12 @@ func (g *Game) updateJOIN1() error {
 		g.setupPacket(0)
 		g.animationStep = stepResponding
 	case stepResponding:
-		if g.movePacket(0) {
-			g.animationStep = stepScanningOrderTable
-			g.orderScanIndex[0] = 0
-			g.packetY[0] = 110 + float32(g.orderScanIndex[0]*30) + 12
+		if g.AnimationType == "JOIN1" || g.AnimationType == "" {
+			if g.movePacket(0) {
+				g.animationStep = stepScanningOrderTable
+				g.orderScanIndex[0] = 0
+				g.packetY[0] = 110 + float32(g.orderScanIndex[0]*30) + 12
+			}
 		}
 	case stepScanningOrderTable:
 		select {
@@ -302,29 +304,31 @@ func (g *Game) updateJOIN1() error {
 		default:
 		}
 	case stepJoining:
-		g.showJoined = true
-		found := false
-		for i, o := range g.Orders {
-			if o.UserID == g.Users[g.currentUserIndex].UserID {
-				g.Joined = append(g.Joined, JoinedData{User: g.Users[g.currentUserIndex], Order: o})
-				g.orderScanIndex[0] = i
-				found = true
-				break
+		if g.AnimationType == "JOIN1" || g.AnimationType == "" {
+			g.showJoined = true
+			found := false
+			for i, o := range g.Orders {
+				if o.UserID == g.Users[g.currentUserIndex].UserID {
+					g.Joined = append(g.Joined, JoinedData{User: g.Users[g.currentUserIndex], Order: o})
+					g.orderScanIndex[0] = i
+					found = true
+					break
+				}
 			}
-		}
-		if !found {
-			g.orderScanIndex[0] = -1 // Indicate not found
-		}
-		time.AfterFunc(300*time.Millisecond, func() {
-			g.currentUserIndex++
-			if g.currentUserIndex >= len(g.Users) {
-				g.animationStep = stepFinished
-			} else {
-				g.animationStep = stepRequesting
-				g.setPacketStartPosition()
+			if !found {
+				g.orderScanIndex[0] = -1 // Indicate not found
 			}
-		})
-		g.animationStep = -1 // Pause while timer runs
+			time.AfterFunc(300*time.Millisecond, func() {
+				g.currentUserIndex++
+				if g.currentUserIndex >= len(g.Users) {
+					g.animationStep = stepFinished
+				} else {
+					g.animationStep = stepRequesting
+					g.setPacketStartPosition()
+				}
+			})
+			g.animationStep = -1 // Pause while timer runs
+		}
 
 	case stepFinished:
 		g.startAnimation()
@@ -341,78 +345,70 @@ func (g *Game) updateJOIN2() error {
 	switch g.animationStep {
 	case stepRequesting:
 		for i := 0; i < 2; i++ {
-			g.packetTargetX[i] = 760
-			g.packetTargetY[i] = float32(50+60+12) + float32(i*300)
+			currentUser := g.UserMachines[i][g.currentUserIndex]
+			found := false
+			for m := 0; m < 2; m++ { // Search in both order machines
+				for j, order := range g.OrderMachines[m] {
+					if order.UserID == currentUser.UserID {
+						g.currentOrderMachineIndex[i] = m
+						g.currentOrderIndex[i] = j
+						found = true
+						break
+					}
+				}
+				if found {
+					break
+				}
+			}
+
+			if found {
+				m := g.currentOrderMachineIndex[i]
+				j := g.currentOrderIndex[i]
+				g.packetTargetX[i] = 760
+				g.packetTargetY[i] = float32(50+m*300+60+j*30+12)
+			} else {
+				g.currentOrderIndex[i] = -1
+				g.packetTargetX[i] = g.packetX[i] // Stay in place
+				g.packetTargetY[i] = g.packetY[i]
+			}
 			g.setupPacket(i)
 		}
 		g.animationStep = stepResponding
+
 	case stepResponding:
-		packetsFinished := 0
-		for i := 0; i < 2; i++ {
-			if g.movePacket(i) {
-				packetsFinished++
-			}
-		}
-		if packetsFinished == 2 {
-			g.animationStep = stepScanningOrderTable
-			g.orderScanIndex = [2]int{0, 0}
-			g.matchFound = [2]bool{false, false}
+		if g.AnimationType == "JOIN2" {
+			packetsFinished := 0
 			for i := 0; i < 2; i++ {
-				g.packetY[i] = float32(50+60+12) + float32(i*300)
-			}
-		}
-	case stepScanningOrderTable:
-		select {
-		case <-g.animationTimer.C:
-			for i := 0; i < 2; i++ {
-				if g.matchFound[i] {
-					continue
-				}
-				currentUser := g.UserMachines[i][g.currentUserIndex]
-				if g.orderScanIndex[i] < len(g.OrderMachines[i]) {
-					if g.OrderMachines[i][g.orderScanIndex[i]].UserID == currentUser.UserID {
-						g.matchFound[i] = true
-						g.currentOrderMachineIndex[i] = i
-						g.currentOrderIndex[i] = g.orderScanIndex[i]
-					} else {
-						g.orderScanIndex[i]++
-						if g.orderScanIndex[i] < len(g.OrderMachines[i]) {
-							g.packetY[i] = float32(50+60+g.orderScanIndex[i]*30+12) + float32(i*300)
-						} else {
-							g.matchFound[i] = true // Not found
-						}
-					}
-				} else {
-					g.matchFound[i] = true // Not found
+				if g.movePacket(i) {
+					packetsFinished++
 				}
 			}
-			if g.matchFound[0] && g.matchFound[1] {
+			if packetsFinished == 2 {
 				g.animationStep = stepJoining
 			}
-		default:
 		}
+
 	case stepJoining:
-		g.showJoined = true
-		for i := 0; i < 2; i++ {
-			// Check if a match was found before appending
-			if g.currentOrderIndex[i] != 0 || g.OrderMachines[g.currentOrderMachineIndex[i]][g.currentOrderIndex[i]].UserID == g.UserMachines[i][g.currentUserIndex].UserID {
-				currentUser := g.UserMachines[i][g.currentUserIndex]
-				order := g.OrderMachines[g.currentOrderMachineIndex[i]][g.currentOrderIndex[i]]
-				g.Joined = append(g.Joined, JoinedData{User: currentUser, Order: order})
+		if g.AnimationType == "JOIN2" {
+			g.showJoined = true
+			for i := 0; i < 2; i++ {
+				if g.currentOrderIndex[i] != -1 {
+					currentUser := g.UserMachines[i][g.currentUserIndex]
+					order := g.OrderMachines[g.currentOrderMachineIndex[i]][g.currentOrderIndex[i]]
+					g.Joined = append(g.Joined, JoinedData{User: currentUser, Order: order})
+				}
 			}
+			time.AfterFunc(300*time.Millisecond, func() {
+				g.currentUserIndex++
+				if g.currentUserIndex >= len(g.UserMachines[0]) {
+					g.animationStep = stepFinished
+				} else {
+					g.animationStep = stepRequesting
+					g.setPacketStartPosition()
+				}
+			})
+			g.animationStep = -1 // Pause
 		}
-		time.AfterFunc(300*time.Millisecond, func() {
-			g.currentUserIndex++
-			if g.currentUserIndex >= len(g.UserMachines[0]) {
-				g.animationStep = stepFinished
-			} else {
-				g.animationStep = stepRequesting
-				g.setPacketStartPosition()
-			}
-		})
-		g.animationStep = -1 // Pause
-	case stepFinished:
-		g.startAnimation()
 	}
 	return nil
 }
@@ -517,16 +513,18 @@ func (g *Game) updateJOIN3() error {
 		}
 
 	case stepJoining:
-		select {
-		case <-g.animationTimer.C:
-			g.currentUserIndex++
-			if g.currentUserIndex >= len(g.UserMachines[0]) {
-				g.animationStep = stepFinished
-			} else {
-				g.animationStep = stepUserToIndexRequest
-				g.setPacketStartPosition()
+		if g.AnimationType == "JOIN3" {
+			select {
+			case <-g.animationTimer.C:
+				g.currentUserIndex++
+				if g.currentUserIndex >= len(g.UserMachines[0]) {
+					g.animationStep = stepFinished
+				} else {
+					g.animationStep = stepUserToIndexRequest
+					g.setPacketStartPosition()
+				}
+			default:
 			}
-		default:
 		}
 
 	case stepFinished:
@@ -551,7 +549,7 @@ func (g *Game) drawJOIN1(screen *ebiten.Image) {
 func (g *Game) drawJOIN2(screen *ebiten.Image) {
 	g.drawTablesJOIN2(screen)
 	g.drawJoinedTable(screen, 650)
-	if g.animationStep == stepResponding || g.animationStep == stepScanningOrderTable {
+	if g.animationStep == stepResponding {
 		for i := 0; i < 2; i++ {
 			vector.DrawFilledCircle(screen, g.packetX[i], g.packetY[i], 5, color.RGBA{R: 0xff, A: 0xff}, false)
 		}
@@ -620,12 +618,7 @@ func (g *Game) drawTablesJOIN2(screen *ebiten.Image) {
 		g.drawScaledText(screen, fmt.Sprintf("Order Machine %d", i+1), 760, int(yOffset)+10, color.White)
 		for j, o := range g.OrderMachines[i] {
 			var c color.Color = color.White
-			if g.animationStep == stepScanningOrderTable {
-				if !g.matchFound[i] && j == g.orderScanIndex[i] {
-					c = color.RGBA{B: 0xff, A: 0xff} // Blue
-				}
-			}
-			if g.matchFound[i] && j == g.currentOrderIndex[i] {
+			if g.animationStep == stepJoining && g.currentOrderIndex[i] == j && g.currentOrderMachineIndex[i] == i {
 				c = color.RGBA{R: 0xff, G: 0xff, A: 0xff} // Yellow
 			}
 			g.drawScaledText(screen, fmt.Sprintf("OrderID: %d, UserID: %d, Item: %s", o.OrderID, o.UserID, o.Item), 760, int(yOffset)+60+j*30, c)
@@ -733,7 +726,7 @@ func (g *Game) setPacketStartPositionJOIN3() {
 		}
 		g.packetStartX[i] = 450
 		g.packetStartY[i] = userY
-		g.packetX[i], g.packetY[i] = g.packetStartX[i], g.packetStartY[i]
+		g.packetX[i], g.packetY[i] = g.packetStartX[i], g.packetY[i]
 	}
 }
 
