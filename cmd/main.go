@@ -52,6 +52,10 @@ const (
 	stepGroupByTopLayer
 	stepPauseBeforeRestart
 
+	// GROUPBY2 specific
+	stepParallelAggregation
+	stepG2_PauseBeforeRestart
+
 	textScale = 24.0 / 13.0
 )
 
@@ -114,6 +118,13 @@ type Game struct {
 	needsToMove              [2]bool
 	currentIndexMachineIndex [2]int
 	currentIndexIndex        [2]int
+	AllOrders                []Order // For GROUPBY2
+	ItemLocations            map[string][]struct {
+		Split int
+		Row   int
+	}
+	ParallelScanIndex    int
+	ParallelAggregations map[string]int
 
 	// Packets (up to 4 for GROUPBY1)
 	packetX, packetY             [4]float32
@@ -133,6 +144,8 @@ func NewGame(animationType string) *Game {
 		return NewGameJOIN3(animationType)
 	case "GROUPBY1":
 		return NewGameGROUPBY1(animationType)
+	case "GROUPBY2":
+		return NewGameGROUPBY2(animationType)
 	default:
 		return NewGameJOIN1(animationType)
 	}
@@ -263,6 +276,48 @@ func NewGameGROUPBY1(animationType string) *Game {
 	return g
 }
 
+func NewGameGROUPBY2(animationType string) *Game {
+	rand.Seed(time.Now().UnixNano())
+	items := []string{"Apple", "Banana", "Cherry", "Grape", "Orange"}
+
+	// Create 40 orders with random items
+	allOrders := make([]Order, 40)
+	for i := 0; i < 40; i++ {
+		allOrders[i] = Order{
+			OrderID: 1000 + i,
+			UserID:  rand.Intn(100),
+			Item:    items[rand.Intn(len(items))],
+			Price:   100 + rand.Intn(900),
+		}
+	}
+
+	// Sort by Item, then OrderID
+	sort.Slice(allOrders, func(i, j int) bool {
+		if allOrders[i].Item != allOrders[j].Item {
+			return allOrders[i].Item < allOrders[j].Item
+		}
+		return allOrders[i].OrderID < allOrders[j].OrderID
+	})
+
+	// Distribute sorted orders into 4 machines
+	orderMachines := [4][]Order{}
+	for i := 0; i < 4; i++ {
+		orderMachines[i] = make([]Order, 10)
+		for j := 0; j < 10; j++ {
+			orderMachines[i][j] = allOrders[i*10+j]
+		}
+	}
+
+	g := &Game{
+		OrderMachines: orderMachines,
+		AllOrders:     allOrders,
+		animationStep: stepIdle,
+		packetSpeed:   4,
+		AnimationType: animationType,
+	}
+	return g
+}
+
 // --- Core Logic ---
 
 func (g *Game) startAnimation() {
@@ -272,6 +327,23 @@ func (g *Game) startAnimation() {
 		g.animationStep = stepGroupByBottomLayer
 		g.BottomLayerResults = [4][]AggregationResult{}
 		g.MiddleLayerResults = [2][]AggregationResult{}
+		g.TopLayerResult = []AggregationResult{}
+	} else if g.AnimationType == "GROUPBY2" {
+		g.animationStep = stepParallelAggregation // New step name
+		g.ItemLocations = make(map[string][]struct {
+			Split int
+			Row   int
+		})
+		for i, machine := range g.OrderMachines {
+			for j, order := range machine {
+				g.ItemLocations[order.Item] = append(g.ItemLocations[order.Item], struct {
+					Split int
+					Row   int
+				}{i, j})
+			}
+		}
+		g.ParallelScanIndex = 0
+		g.ParallelAggregations = make(map[string]int)
 		g.TopLayerResult = []AggregationResult{}
 	} else {
 		g.animationStep = stepRequesting
@@ -291,6 +363,8 @@ func (g *Game) Update() error {
 		return g.updateJOIN3()
 	case "GROUPBY1":
 		return g.updateGROUPBY1()
+	case "GROUPBY2":
+		return g.updateGROUPBY2()
 	default: // JOIN1 and empty
 		return g.updateJOIN1()
 	}
@@ -304,6 +378,8 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		g.drawJOIN3(screen)
 	case "GROUPBY1":
 		g.drawGROUPBY1(screen)
+	case "GROUPBY2":
+		g.drawGROUPBY2(screen)
 	default: // JOIN1 and empty
 		g.drawJOIN1(screen)
 	}
@@ -724,6 +800,58 @@ func (g *Game) updateGROUPBY1() error {
 	return nil
 }
 
+func (g *Game) updateGROUPBY2() error {
+	if g.animationStep == stepIdle {
+		if inpututil.IsKeyJustPressed(ebiten.KeySpace) {
+			g.startAnimation()
+		}
+		return nil
+	}
+
+	if g.animationStep == stepParallelAggregation {
+		select {
+		case <-g.animationTimer.C:
+			// Update aggregations for all items at the current scan index
+			itemsFinished := 0
+			for item, locations := range g.ItemLocations {
+				if g.ParallelScanIndex < len(locations) {
+					loc := locations[g.ParallelScanIndex]
+					order := g.OrderMachines[loc.Split][loc.Row]
+					g.ParallelAggregations[item] += order.Price
+				} else {
+					itemsFinished++
+				}
+			}
+
+			g.ParallelScanIndex++
+
+			// Check if all items are done
+			if itemsFinished == len(g.ItemLocations) {
+				// Transfer final results to TopLayerResult for display
+				var agg []AggregationResult
+				for item, price := range g.ParallelAggregations {
+					agg = append(agg, AggregationResult{Item: item, Price: price})
+				}
+				sort.Slice(agg, func(i, j int) bool { return agg[i].Item < agg[j].Item })
+				g.TopLayerResult = agg
+				g.animationStep = stepG2_PauseBeforeRestart
+			}
+
+		default:
+		}
+	}
+
+	if g.animationStep == stepG2_PauseBeforeRestart {
+		time.AfterFunc(3*time.Second, func() {
+			g.startAnimation()
+		})
+		// Use a different step to pause, to avoid re-triggering the timer
+		g.animationStep = stepFinished
+	}
+
+	return nil
+}
+
 func (g *Game) updateJOIN3() error {
 	if g.animationStep == stepIdle {
 		if g.AnimationType == "JOIN3" {
@@ -920,6 +1048,60 @@ func (g *Game) drawGROUPBY1(screen *ebiten.Image) {
 	for i := 0; i < 4; i++ {
 		if g.packetActive[i] {
 			vector.DrawFilledCircle(screen, g.packetX[i], g.packetY[i], 10, color.RGBA{R: 0xff, A: 0xff}, false)
+		}
+	}
+
+	if g.animationStep == stepIdle {
+		g.drawScaledText(screen, "Press Space to Start Animation", 594, screenHeight-40, color.White)
+	}
+}
+
+func (g *Game) drawGROUPBY2(screen *ebiten.Image) {
+	// Left side: 4 splits
+	for i := 0; i < 4; i++ {
+		x := float32(50 + i*225) // Tighter packing
+		vector.DrawFilledRect(screen, x, 50, 200, 900, color.RGBA{R: 0x30, G: 0x30, B: 0x30, A: 0xff}, false)
+		g.drawScaledText(screen, fmt.Sprintf("Split %d", i+1), int(x)+10, 60, color.White)
+		g.drawScaledText(screen, "Item,OrderID,Price", int(x)+10, 90, color.White)
+		for j, order := range g.OrderMachines[i] {
+			g.drawScaledText(screen, fmt.Sprintf("%s,%d,%d", order.Item, order.OrderID, order.Price), int(x)+10, 115+j*25, color.White)
+		}
+	}
+
+	// Right side: Final Result
+	vector.DrawFilledRect(screen, 1000, 50, 550, 900, color.RGBA{R: 0x60, G: 0x30, B: 0x30, A: 0xff}, false)
+	g.drawScaledText(screen, "Final Aggregation Result", 1010, 60, color.White)
+
+	// Draw highlights and results
+	if g.animationStep == stepParallelAggregation {
+		// Draw highlights
+		for _, locations := range g.ItemLocations {
+			if g.ParallelScanIndex < len(locations) {
+				loc := locations[g.ParallelScanIndex]
+				x := float32(50 + loc.Split*225)
+				y := float32(115 + loc.Row*25)
+				vector.DrawFilledRect(screen, x, y-13, 200, 25, color.RGBA{R: 0xff, G: 0xff, A: 0x80}, false)
+			}
+		}
+		// Draw running totals
+		var items []string
+		for item := range g.ParallelAggregations {
+			items = append(items, item)
+		}
+		sort.Strings(items)
+		yOffset := 115
+		for _, item := range items {
+			price := g.ParallelAggregations[item]
+			g.drawScaledText(screen, fmt.Sprintf("%s: %d (Processing...)", item, price), 1010, yOffset, color.White)
+			yOffset += 25
+		}
+
+	} else if g.animationStep == stepFinished || g.animationStep == stepG2_PauseBeforeRestart {
+		// Draw final results
+		yOffset := 115
+		for _, res := range g.TopLayerResult {
+			g.drawScaledText(screen, fmt.Sprintf("%s: %d", res.Item, res.Price), 1010, yOffset, color.White)
+			yOffset += 25
 		}
 	}
 
